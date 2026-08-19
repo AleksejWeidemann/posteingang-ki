@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 from anthropic import Anthropic
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Optional
 
 MODELL = "claude-haiku-4-5-20251001"
 
@@ -24,6 +24,20 @@ Der Absender ist selbst unsicher, was er will.
 Der Text ist zu knapp oder zu vage fuer eine sichere Zuordnung.
 Es ist kein Anliegen erkennbar."""
 
+EXTRAKTION_PROMPT = """Du extrahierst Kerndaten aus Schadenmeldungen von Versicherungen.
+
+Uebernimm nur Angaben, die woertlich im Text stehen. Rate nicht und leite nichts ab.
+Fehlt eine Angabe, lass das Feld leer.
+
+betrag ist die Hoehe des Schadens oder der Reparaturkosten.
+Der Kaufpreis oder Neuwert eines Gegenstandes ist NICHT der Schadenbetrag.
+datum ist der Zeitpunkt des Schadeneintritts, nicht das Datum des Schreibens.
+Unbestimmte Zeitangaben wie gestern oder letztes Wochenende sind kein Datum.
+
+schadennummer ist ausschliesslich das Aktenzeichen eines Schadenfalls.
+Eine Vertragsnummer oder Policennummer ist KEINE Schadennummer.
+Steht im Text nur eine Vertragsnummer, bleibt schadennummer leer."""
+
 client = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
 
@@ -39,6 +53,13 @@ class DokumentAnalyse(BaseModel):
     )
 
 
+class Schadendaten(BaseModel):
+    schadennummer: Optional[str] = Field(description="Aktenzeichen der Schadenmeldung")
+    name: Optional[str] = Field(description="Name der meldenden Person")
+    datum: Optional[str] = Field(description="Datum des Schadeneintritts")
+    betrag: Optional[str] = Field(description="Schadenhoehe oder Reparaturkosten")
+
+
 def analysiere(text):
     """Schickt einen Dokumententext ans Modell und gibt Analyse und Tokenverbrauch zurueck."""
     antwort = client.messages.parse(
@@ -49,6 +70,18 @@ def analysiere(text):
             {"role": "user", "content": f"Analysiere dieses Versicherungsdokument.\n\n{text}"}
         ],
         output_format=DokumentAnalyse,
+    )
+    return antwort.parsed_output, antwort.usage
+
+
+def extrahiere(text):
+    """Holt Kerndaten aus einer Schadenmeldung."""
+    antwort = client.messages.parse(
+        model=MODELL,
+        max_tokens=400,
+        system=EXTRAKTION_PROMPT,
+        messages=[{"role": "user", "content": f"Extrahiere die Kerndaten.\n\n{text}"}],
+        output_format=Schadendaten,
     )
     return antwort.parsed_output, antwort.usage
 
@@ -71,6 +104,17 @@ if datei is not None:
         for i, zeile in df.iterrows():
             try:
                 ergebnis, verbrauch = analysiere(zeile["text"])
+                tokens_rein += verbrauch.input_tokens
+                tokens_raus += verbrauch.output_tokens
+
+                felder = {"schadennummer": "", "name": "", "datum": "", "betrag": ""}
+                if ergebnis.kategorie == "Schadenmeldung":
+                    daten, verbrauch2 = extrahiere(zeile["text"])
+                    tokens_rein += verbrauch2.input_tokens
+                    tokens_raus += verbrauch2.output_tokens
+                    for feld, wert in daten.model_dump().items():
+                        felder[feld] = wert if wert else "fehlt"
+
                 zeilen.append(
                     {
                         "id": zeile["id"],
@@ -78,11 +122,10 @@ if datei is not None:
                         "dringlichkeit": ergebnis.dringlichkeit,
                         "konfidenz": ergebnis.konfidenz,
                         "fehlende_angaben": ", ".join(ergebnis.fehlende_angaben),
+                        **felder,
                         "begruendung": ergebnis.begruendung,
                     }
                 )
-                tokens_rein += verbrauch.input_tokens
-                tokens_raus += verbrauch.output_tokens
             except Exception as fehler:
                 zeilen.append(
                     {
@@ -91,6 +134,10 @@ if datei is not None:
                         "dringlichkeit": "",
                         "konfidenz": 0.0,
                         "fehlende_angaben": "",
+                        "schadennummer": "",
+                        "name": "",
+                        "datum": "",
+                        "betrag": "",
                         "begruendung": str(fehler),
                     }
                 )
@@ -112,4 +159,4 @@ if datei is not None:
             f"Tokenverbrauch gesamt: {rein} rein, {raus} raus | geschaetzte Kosten: {kosten:.4f} USD"
         )
 else:
-    st.info("Bitte lade eine CSV-Datei mit den Spalten 'id' und 'text' hoch.")
+    st.info("Bitte lade eine CSV-Datei mit den Spalten 'id' und 'text' hoch.") 

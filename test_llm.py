@@ -1,70 +1,45 @@
 import os
-from typing import Literal
+from typing import Optional
 from anthropic import Anthropic
 from pydantic import BaseModel, Field
 
-# Modellname steht zentral. Ein Wechsel kostet nur eine Zeile.
 MODELL = "claude-haiku-4-5-20251001"
 
-# Der Schluessel kommt aus der Umgebung, nie aus dem Code.
 client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+EXTRAKTION_PROMPT = """Du extrahierst Kerndaten aus Schadenmeldungen von Versicherungen.
 
-# Das Antwortschema. Das Modell muss genau in dieser Form antworten.
-class DokumentAnalyse(BaseModel):
-    # Literal laesst nur diese fuenf Werte zu.
-    kategorie: Literal[
-        "Schadenmeldung", "Beschwerde", "Vertragsanfrage", "Kündigung", "Sonstiges"
-    ]
-    dringlichkeit: Literal["hoch", "mittel", "niedrig"]
-    # description wird ans Modell uebertragen und wirkt wie eine Anweisung.
-    konfidenz: float = Field(description="Sicherheit der Einordnung, zwischen 0 und 1")
-    begruendung: str = Field(description="Ein Satz zur Begruendung der Kategorie")
-    fehlende_angaben: list[str] = Field(
-        description="Nur Angaben, die im Text fehlen und ohne die eine Bearbeitung unmoeglich ist. Zulaessige Werte: Schadennummer, Name, Datum, Betrag, Vertragsnummer. Keine Anlagen wie Fotos oder Belege. Leere Liste, wenn nichts Wesentliches fehlt."
-    )
+Uebernimm nur Angaben, die woertlich im Text stehen. Rate nicht und leite nichts ab.
+Fehlt eine Angabe, lass das Feld leer.
 
-SYSTEM_PROMPT = """Du ordnest eingehende Versicherungsdokumente einer Kategorie zu.
+betrag ist die Hoehe des Schadens oder der Reparaturkosten.
+Der Kaufpreis oder Neuwert eines Gegenstandes ist NICHT der Schadenbetrag.
+datum ist der Zeitpunkt des Schadeneintritts, nicht das Datum des Schreibens.
+Unbestimmte Zeitangaben wie gestern oder letztes Wochenende sind kein Datum."""
 
-Kategorien:
-Schadenmeldung: Ein Schaden ist eingetreten und wird gemeldet.
-Beschwerde: Unzufriedenheit mit Bearbeitung, Personal, Beitrag oder Entscheidung.
-Vertragsanfrage: Frage zu Konditionen, Deckung, Aenderung oder Neuabschluss.
-Kündigung: Ausdruecklicher Wunsch, einen Vertrag zu beenden.
-Sonstiges: Alles andere, etwa Adressaenderungen oder reine Begleitschreiben.
 
-Die Konfidenz bewertet die Eindeutigkeit des Dokuments, nicht deine Formulierungssicherheit.
-Vergib unter 0.7, wenn eines zutrifft:
-Der Text passt auf mehrere Kategorien.
-Der Absender ist selbst unsicher, was er will.
-Der Text ist zu knapp oder zu vage fuer eine sichere Zuordnung.
-Es ist kein Anliegen erkennbar."""
+class Schadendaten(BaseModel):
+    schadennummer: Optional[str] = Field(description="Aktenzeichen der Schadenmeldung")
+    name: Optional[str] = Field(description="Name der meldenden Person")
+    datum: Optional[str] = Field(description="Datum des Schadeneintritts")
+    betrag: Optional[str] = Field(description="Schadenhoehe oder Reparaturkosten")
 
-# Testfall ist DOK-027, einer der bewusst uneindeutigen Faelle.
-BEISPIEL = "schaden am auto. steinschlag in der frontscheibe, riss zieht sich mittlerweile ueber die halbe scheibe. muss getauscht werden sagt die werkstatt. wann kann ich termin machen"
 
-# parse schickt das Schema mit und validiert die Antwort.
+BEISPIEL = "Sehr geehrte Damen und Herren, hiermit melde ich einen Schaden an meinem Fahrzeug. Am 14.03.2026 gegen 17:30 Uhr wurde mein PKW auf dem Parkplatz des Einkaufszentrums Nordpassage im Bereich der Fahrertuer beschaedigt. Der Verursacher hat einen Zettel hinterlassen. Meine Schadennummer aus dem telefonischen Erstkontakt lautet KFZ-2026-44871. Der Kostenvoranschlag der Werkstatt belaeuft sich auf 2.340,00 EUR. Mit freundlichen Gruessen, Thomas Berger"
+
+
 antwort = client.messages.parse(
     model=MODELL,
-    max_tokens=500,
-    system=SYSTEM_PROMPT,
-    messages=[
-        {"role": "user", "content": f"Analysiere dieses Versicherungsdokument.\n\n{BEISPIEL}"}
-    ],
-    output_format=DokumentAnalyse,
+    max_tokens=400,
+    system=EXTRAKTION_PROMPT,
+    messages=[{"role": "user", "content": f"Extrahiere die Kerndaten.\n\n{BEISPIEL}"}],
+    output_format=Schadendaten,
 )
 
-# Fertiges Objekt. Es muss kein Text mehr zerlegt werden.
-ergebnis = antwort.parsed_output
+daten = antwort.parsed_output
 
-print("--- Objekt ---")
-print(ergebnis)
+for feld, wert in daten.model_dump().items():
+    print(f"{feld}: {wert if wert else 'fehlt'}")
+
 print()
-print("--- Einzelne Felder ---")
-print("Kategorie:", ergebnis.kategorie)
-print("Konfidenz:", ergebnis.konfidenz, "| Typ:", type(ergebnis.konfidenz))
-print("Fehlende Angaben:", ergebnis.fehlende_angaben)
-print()
-# Bei max_tokens oder refusal passt die Antwort moeglicherweise nicht zum Schema.
 print("stop_reason:", antwort.stop_reason)
-print("Tokens:", antwort.usage.input_tokens, "rein,", antwort.usage.output_tokens, "raus")
