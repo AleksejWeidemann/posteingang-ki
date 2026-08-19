@@ -41,7 +41,7 @@ Der Text ist zu knapp oder zu vage fuer eine sichere Zuordnung.
 Es ist kein Anliegen erkennbar."""
 
 # Testfall ist DOK-027, einer der bewusst uneindeutigen Faelle.
-BEISPIEL = "Sehr geehrte Damen und Herren, hiermit melde ich einen Schaden an meinem Fahrzeug. Am 14.03.2026 gegen 17:30 Uhr wurde mein PKW auf dem Parkplatz des Einkaufszentrums Nordpassage im Bereich der Fahrertuer beschaedigt. Der Verursacher hat einen Zettel hinterlassen. Meine Schadennummer aus dem telefonischen Erstkontakt lautet KFZ-2026-44871. Der Kostenvoranschlag der Werkstatt belaeuft sich auf 2.340,00 EUR. Mit freundlichen Gruessen, Thomas Berger"
+BEISPIEL = "schaden am auto. steinschlag in der frontscheibe, riss zieht sich mittlerweile ueber die halbe scheibe. muss getauscht werden sagt die werkstatt. wann kann ich termin machen"
 
 # parse schickt das Schema mit und validiert die Antwort.
 antwort = client.messages.parse(
