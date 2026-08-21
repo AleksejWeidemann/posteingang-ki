@@ -6,6 +6,8 @@ from anthropic import Anthropic
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 
+from eskalation import eskalationsgruende
+
 MODELL = "claude-haiku-4-5-20251001"
 
 SYSTEM_PROMPT = """Du ordnest eingehende Versicherungsdokumente einer Kategorie zu.
@@ -33,7 +35,6 @@ betrag ist die Hoehe des Schadens oder der Reparaturkosten.
 Der Kaufpreis oder Neuwert eines Gegenstandes ist NICHT der Schadenbetrag.
 datum ist der Zeitpunkt des Schadeneintritts, nicht das Datum des Schreibens.
 Unbestimmte Zeitangaben wie gestern oder letztes Wochenende sind kein Datum.
-
 schadennummer ist ausschliesslich das Aktenzeichen eines Schadenfalls.
 Eine Vertragsnummer oder Policennummer ist KEINE Schadennummer.
 Steht im Text nur eine Vertragsnummer, bleibt schadennummer leer."""
@@ -115,12 +116,21 @@ if datei is not None:
                     for feld, wert in daten.model_dump().items():
                         felder[feld] = wert if wert else "fehlt"
 
+                gruende = eskalationsgruende(
+                    ergebnis.kategorie,
+                    ergebnis.konfidenz,
+                    ", ".join(ergebnis.fehlende_angaben),
+                    felder["datum"],
+                )
+
                 zeilen.append(
                     {
                         "id": zeile["id"],
                         "kategorie": ergebnis.kategorie,
                         "dringlichkeit": ergebnis.dringlichkeit,
                         "konfidenz": ergebnis.konfidenz,
+                        "pruefung": len(gruende) > 0,
+                        "eskalationsgrund": ", ".join(gruende),
                         "fehlende_angaben": ", ".join(ergebnis.fehlende_angaben),
                         **felder,
                         "begruendung": ergebnis.begruendung,
@@ -133,6 +143,8 @@ if datei is not None:
                         "kategorie": "FEHLER",
                         "dringlichkeit": "",
                         "konfidenz": 0.0,
+                        "pruefung": True,
+                        "eskalationsgrund": "Technischer Fehler",
                         "fehlende_angaben": "",
                         "schadennummer": "",
                         "name": "",
@@ -152,11 +164,19 @@ if datei is not None:
         st.session_state["tokens"] = (tokens_rein, tokens_raus)
 
     if "ergebnisse" in st.session_state:
-        st.dataframe(st.session_state["ergebnisse"])
+        erg = st.session_state["ergebnisse"]
+        automatisch = len(erg) - erg["pruefung"].sum()
+        quote = automatisch / len(erg) * 100
+
+        spalte1, spalte2 = st.columns(2)
+        spalte1.metric("Automatisch verarbeitet", f"{automatisch} von {len(erg)}")
+        spalte2.metric("Automatisierungsquote", f"{quote:.0f} %")
+
+        st.dataframe(erg)
         rein, raus = st.session_state["tokens"]
         kosten = rein / 1_000_000 * 1.0 + raus / 1_000_000 * 5.0
         st.caption(
             f"Tokenverbrauch gesamt: {rein} rein, {raus} raus | geschaetzte Kosten: {kosten:.4f} USD"
         )
 else:
-    st.info("Bitte lade eine CSV-Datei mit den Spalten 'id' und 'text' hoch.") 
+    st.info("Bitte lade eine CSV-Datei mit den Spalten 'id' und 'text' hoch.")
